@@ -65,7 +65,6 @@
   @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
   .item:active { transform: scale(0.99); }
   
-  /* Expiry Status Styling */
   .item.status-soon { border-color: rgba(255,170,51,0.3); background: linear-gradient(180deg, var(--low-soft), var(--surface)); }
   .item.status-expired { border-color: rgba(255,77,94,0.35); background: linear-gradient(180deg, var(--out-soft), var(--surface)); }
 
@@ -166,12 +165,37 @@
   .close-btn { background: none; border: none; color: var(--text-dim); font-size: 24px; cursor: pointer; padding: 4px 8px; }
 
   .name-field { margin-bottom: 14px; }
-  .image-qty-row { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; margin-bottom: 14px; align-items: start; }
+  
+  /* --- FIXED LAYOUT FOR IMAGE AND FIELDS --- */
+  .image-qty-row { 
+    display: grid; 
+    grid-template-columns: 1fr; /* Stack vertically on mobile by default */
+    gap: 12px; 
+    margin-bottom: 14px; 
+    align-items: start; 
+  }
+  
+  @media (min-width: 480px) {
+    .image-qty-row {
+      grid-template-columns: 1.5fr 1fr; /* Side-by-side only when there's enough room */
+    }
+  }
+
   .image-column { display: flex; flex-direction: column; }
+  
   .image-container {
-    width: 100%; aspect-ratio: 16/9; min-height: 150px; background: var(--surface-2);
-    border: 2px dashed var(--border); border-radius: 12px; display: flex;
-    align-items: center; justify-content: center; overflow: hidden; position: relative;
+    width: 100%; 
+    aspect-ratio: 16/9; 
+    min-height: 120px; /* Reduced for better mobile proportion */
+    max-height: 240px; /* Prevent it from getting too tall on wide screens */
+    background: var(--surface-2);
+    border: 2px dashed var(--border); 
+    border-radius: 12px; 
+    display: flex;
+    align-items: center; 
+    justify-content: center; 
+    overflow: hidden; 
+    position: relative;
   }
   .image-container img { width: 100%; height: 100%; object-fit: cover; display: none; }
   .image-container img.loaded { display: block; }
@@ -192,18 +216,47 @@
   .image-btn.delete-btn:disabled { opacity: 0.4; cursor: not-allowed; }
   .image-btn svg { width: 18px; height: 18px; }
 
-  .qty-fields-column { display: flex; flex-direction: column; align-items: center; gap: 8px; }
-  .compact-field { display: flex; flex-direction: column; width: 100%; }
-  .compact-field label {
-    display: block; font-size: 10px; color: var(--text-dim); margin-bottom: 2px;
-    font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; line-height: 1.2; text-align: center;
+  .qty-fields-column { 
+    display: flex; 
+    flex-direction: column; 
+    align-items: stretch; /* Changed from center to stretch for better width usage */
+    gap: 8px; 
   }
+
+  .compact-field { 
+    display: flex; 
+    flex-direction: column; 
+    width: 100%; 
+  }
+
+  .compact-field label {
+    display: block; 
+    font-size: 10px; 
+    color: var(--text-dim); 
+    margin-bottom: 2px;
+    font-weight: 600; 
+    text-transform: uppercase; 
+    letter-spacing: 0.5px; 
+    line-height: 1.2; 
+    text-align: center;
+  }
+
   .compact-field input {
-    width: 100%; padding: 8px; background: var(--bg); border: 1px solid var(--border);
-    border-radius: 8px; color: var(--text); font-size: 14px; outline: none;
-    transition: border-color 0.15s; text-align: center; color-scheme: dark;
+    width: 100%;
+    min-width: 0; /* Crucial: Prevents flex/grid items from overflowing their container */
+    padding: 8px; 
+    background: var(--bg); 
+    border: 1px solid var(--border);
+    border-radius: 8px; 
+    color: var(--text); 
+    font-size: 14px; 
+    outline: none;
+    transition: border-color 0.15s; 
+    text-align: center; 
+    color-scheme: dark;
   }
   .compact-field input:focus { border-color: var(--accent); }
+  /* ----------------------------------------- */
 
   .details-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
   .field { margin-bottom: 14px; }
@@ -785,7 +838,6 @@
       return (it.name + ' ' + (it.category||'') + ' ' + (it.location||'')).toLowerCase().includes(q);
     });
     
-    // Sort by closest expiry date first
     filtered.sort((a, b) => {
       const dateA = a.expiry ? new Date(a.expiry).getTime() : Infinity;
       const dateB = b.expiry ? new Date(b.expiry).getTime() : Infinity;
