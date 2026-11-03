@@ -166,7 +166,10 @@
   .close-btn { background: none; border: none; color: var(--text-dim); font-size: 24px; cursor: pointer; padding: 4px 8px; }
 
   .name-field { margin-bottom: 14px; }
-  .image-qty-row { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; margin-bottom: 14px; align-items: start; }
+  
+  /* UPDATED: Made image column narrower (1.2fr instead of 2fr) and vertically centered (align-items: center) */
+  .image-qty-row { display: grid; grid-template-columns: 1.2fr 1fr; gap: 12px; margin-bottom: 14px; align-items: center; }
+  
   .image-column { display: flex; flex-direction: column; }
   .image-container {
     width: 100%; aspect-ratio: 16/9; min-height: 150px; background: var(--surface-2);
