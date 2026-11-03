@@ -166,10 +166,7 @@
   .close-btn { background: none; border: none; color: var(--text-dim); font-size: 24px; cursor: pointer; padding: 4px 8px; }
 
   .name-field { margin-bottom: 14px; }
-  
-  /* UPDATED: Made image column narrower (1.2fr instead of 2fr) and vertically centered (align-items: center) */
-  .image-qty-row { display: grid; grid-template-columns: 1.2fr 1fr; gap: 12px; margin-bottom: 14px; align-items: center; }
-  
+  .image-qty-row { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; margin-bottom: 14px; align-items: start; }
   .image-column { display: flex; flex-direction: column; }
   .image-container {
     width: 100%; aspect-ratio: 16/9; min-height: 150px; background: var(--surface-2);
@@ -651,4 +648,489 @@
     if (hqUrl && hqUrl !== thumbUrl) payload.hqUrl = hqUrl;
     if (!payload.thumbUrl && !payload.hqUrl) return true;
     try {
-      const result = await postToShe
+      const result = await postToSheets(payload);
+      return result.success;
+    } catch (err) {
+      console.error('Delete image failed:', err);
+      throw err;
+    }
+  }
+
+  async function loadAll(silent = false, force = false) {
+    const cached = loadCache();
+    if (cached && cached.items) {
+      items = cached.items;
+      lastUpdateTime = cached.timestamp;
+      nextRowNumber = Math.max(...items.map(i => i.rowNumber || 0), 1) + 1;
+      render();
+    }
+    if (!force && cached && cached.timestamp && (Date.now() - cached.timestamp) < CACHE_MAX_AGE) return;
+    try {
+      const freshItems = await fetchFromSheets();
+      items = freshItems;
+      lastUpdateTime = Date.now();
+      nextRowNumber = Math.max(...items.map(i => i.rowNumber || 0), 1) + 1;
+      saveCache(items, lastUpdateTime);
+      render();
+      if (!silent) toast('Data refreshed');
+    } catch (err) {
+      console.error('Background fetch failed:', err);
+      if (items.length === 0 && !silent) toast('Could not load: ' + err.message);
+    }
+  }
+
+  async function addItem(data) {
+    const newItem = { id: 'row_' + nextRowNumber, rowNumber: nextRowNumber, ...data };
+    items.push(newItem);
+    nextRowNumber++;
+    saveCache(items);
+    render();
+    toast('Added');
+    try { await postToSheets({ action: 'add', ...data }); } 
+    catch (err) { console.error('Sync failed:', err); toast('Sync failed (saved locally)'); }
+  }
+
+  async function updateItem(item, data) {
+    const original = { ...item };
+    Object.assign(item, data);
+    saveCache(items);
+    render();
+    toast('Updated');
+    try { await postToSheets({ action: 'update', row: item.rowNumber, ...data }); } 
+    catch (err) {
+      console.error('Sync failed:', err);
+      Object.assign(item, original);
+      saveCache(items);
+      render();
+      toast('Save failed');
+    }
+  }
+
+  async function deleteItem(item) {
+    const originalItems = [...items];
+    const imgData = getImageData(item);
+    if (imgData.thumb || imgData.hq) {
+      try { await deleteImageFromDrive(imgData.thumb, imgData.hq); } 
+      catch (err) { console.error('Failed to delete image from Drive:', err); }
+    }
+    items = items.filter(i => i.id !== item.id);
+    saveCache(items);
+    render();
+    toast('Deleted');
+    try { await postToSheets({ action: 'delete', row: item.rowNumber }); } 
+    catch (err) {
+      console.error('Sync failed:', err);
+      items = originalItems;
+      saveCache(items);
+      render();
+      toast('Delete failed');
+    }
+  }
+
+  function getExpiryStatus(expiryStr) {
+    if (!expiryStr) return 'ok';
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const expiry = new Date(expiryStr);
+    if (isNaN(expiry.getTime())) return 'ok';
+    const diffTime = expiry - today;
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    if (diffDays < 0) return 'expired';
+    if (diffDays <= 30) return 'soon';
+    return 'ok';
+  }
+
+  function formatDate(dateStr) {
+    if (!dateStr) return 'Not set';
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return dateStr;
+    return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  }
+
+  function formatExpiryBadge(expiryStr) {
+    if (!expiryStr) return '<span class="expiry-badge ok">No expiry</span>';
+    const status = getExpiryStatus(expiryStr);
+    const dateFormatted = formatDate(expiryStr);
+    return `<span class="expiry-badge ${status}">${dateFormatted}</span>`;
+  }
+
+  function getCategories() {
+    const cats = new Set();
+    items.forEach(it => { if (it.category && it.category.trim() !== '') cats.add(it.category.trim()); });
+    return Array.from(cats).sort((a, b) => a.localeCompare(b));
+  }
+
+  function updateCategoryDropdown() {
+    const categories = getCategories();
+    const currentValue = categorySelect.value;
+    categorySelect.innerHTML = '';
+    const allOption = document.createElement('option');
+    allOption.value = ''; allOption.textContent = 'All categories';
+    categorySelect.appendChild(allOption);
+    categories.forEach(cat => {
+      const option = document.createElement('option');
+      option.value = cat; option.textContent = cat;
+      categorySelect.appendChild(option);
+    });
+    if (currentValue && categories.includes(currentValue)) categorySelect.value = currentValue;
+    else { categorySelect.value = ''; currentCategory = ''; }
+    categorySelect.classList.toggle('empty', categories.length === 0);
+  }
+
+  function getFilteredList() {
+    const q = currentSearch.trim().toLowerCase();
+    let filtered = items.filter(it => {
+      if (currentCategory && (it.category || '').trim() !== currentCategory) return false;
+      if (!q) return true;
+      return (it.name + ' ' + (it.category||'') + ' ' + (it.location||'')).toLowerCase().includes(q);
+    });
+    
+    // Sort by closest expiry date first
+    filtered.sort((a, b) => {
+      const dateA = a.expiry ? new Date(a.expiry).getTime() : Infinity;
+      const dateB = b.expiry ? new Date(b.expiry).getTime() : Infinity;
+      if (dateA !== dateB) return dateA - dateB;
+      return (a.name || '').toString().localeCompare((b.name || '').toString());
+    });
+    
+    return filtered;
+  }
+
+  function render() {
+    items = items.filter(item => item && item.name && item.name.trim() !== '');
+    updateCategoryDropdown();
+    const filtered = getFilteredList();
+    const totalFiltered = filtered.length;
+    const isUnlimited = currentLimit === 'all';
+    const visibleItems = isUnlimited ? filtered : filtered.slice(0, displayLimit);
+    const hasMore = !isUnlimited && totalFiltered > displayLimit;
+    const remaining = totalFiltered - displayLimit;
+
+    let html = '';
+    if (totalFiltered === 0) {
+      let emptyTitle = 'No gift cards yet', emptyMsg = 'Tap + to add your first gift card';
+      if (items.length > 0) {
+        if (currentCategory && currentSearch) { emptyTitle = 'Nothing matches'; emptyMsg = 'Try a different search or category.'; }
+        else if (currentCategory) { emptyTitle = 'No items in this category'; emptyMsg = 'Try selecting a different category.'; }
+        else { emptyTitle = 'Nothing matches'; emptyMsg = 'Try a different search.'; }
+      }
+      html = `<div class="empty">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+        </svg>
+        <h3>${emptyTitle}</h3><p>${emptyMsg}</p>
+      </div>`;
+    } else {
+      html = visibleItems.map(it => {
+        const expiryStatus = getExpiryStatus(it.expiry);
+        const metaParts = [];
+        metaParts.push(`<span class="value-text">$${parseFloat(it.value || 0).toFixed(2)}</span>`);
+        metaParts.push(`<span class="sep">·</span>`);
+        metaParts.push(`<span>Planned: ${formatDate(it.plannedDate)}</span>`);
+        
+        return `<div class="item ${expiryStatus === 'ok' ? '' : 'status-' + expiryStatus}" data-id="${it.id}">
+          <div class="item-name">
+            <span class="item-name-text">${escapeHtml(it.name)}</span>
+            ${formatExpiryBadge(it.expiry)}
+          </div>
+          <div class="item-meta">${metaParts.join('')}</div>
+        </div>`;
+      }).join('');
+
+      if (hasMore) {
+        html += `<button class="load-more" id="loadMoreBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+          <span>Load more</span>
+          <span class="load-more-count">(${remaining} remaining)</span>
+        </button>`;
+      }
+    }
+
+    if (lastUpdateTime) html += `<div class="last-updated">Last updated: ${formatTimeAgo(lastUpdateTime)}</div>`;
+    listEl.innerHTML = html;
+
+    const loadMoreBtn = $('loadMoreBtn');
+    if (loadMoreBtn) loadMoreBtn.addEventListener('click', handleLoadMore);
+  }
+
+  function handleLoadMore() {
+    displayLimit += currentLimit;
+    render();
+    requestAnimationFrame(() => {
+      const newBtn = $('loadMoreBtn');
+      if (newBtn) newBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  listEl.addEventListener('click', e => {
+    const itemEl = e.target.closest('.item');
+    if (!itemEl) return;
+    const item = items.find(i => i.id === itemEl.dataset.id);
+    if (!item) return;
+    openEdit(item);
+  });
+
+  categorySelect.addEventListener('change', e => { currentCategory = e.target.value; displayLimit = currentLimit === 'all' ? Infinity : currentLimit; render(); });
+  limitSelect.addEventListener('change', e => {
+    const val = e.target.value;
+    currentLimit = val === 'all' ? 'all' : parseInt(val, 10);
+    displayLimit = currentLimit === 'all' ? Infinity : currentLimit;
+    render();
+  });
+  $('search').addEventListener('input', e => {
+    if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => {
+      currentSearch = e.target.value;
+      displayLimit = currentLimit === 'all' ? Infinity : currentLimit;
+      render();
+    }, SEARCH_DEBOUNCE_MS);
+  });
+
+  $('addBtn').addEventListener('click', () => openEdit(null));
+  $('closeSheet').addEventListener('click', closeSheet);
+  $('cancelBtn').addEventListener('click', closeSheet);
+  overlay.addEventListener('click', e => { if (e.target === overlay) closeSheet(); });
+
+  $('uploadBtn').addEventListener('click', (e) => { e.stopPropagation(); $('imageFileInput').click(); });
+  $('confirmCancel').addEventListener('click', () => closeConfirm(false));
+  $('confirmOk').addEventListener('click', () => closeConfirm(true));
+  confirmOverlay.addEventListener('click', e => { if (e.target === confirmOverlay) closeConfirm(false); });
+
+  $('deleteImageBtn').addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const thumbUrl = $('itemImageThumb').value;
+    const hqUrl = $('itemImageHq').value;
+    activeImageUploadId++;
+    pendingImageUpload = null;
+    if (currentLocalImageUrl) { URL.revokeObjectURL(currentLocalImageUrl); currentLocalImageUrl = null; }
+    if (!thumbUrl && !hqUrl) {
+      const img = $('itemImageDisplay');
+      const placeholder = $('imagePlaceholder');
+      const imageContainer = $('imageContainer');
+      img.src = ''; img.classList.remove('loaded'); img.style.cursor = 'default'; img.onclick = null;
+      imageContainer.style.cursor = 'default'; imageContainer.onclick = null;
+      placeholder.style.display = 'block';
+      $('deleteImageBtn').disabled = true;
+      return;
+    }
+    const confirmed = await showConfirm('Delete image?', 'This will delete the images from Google Drive and remove them from this item.', 'Delete Image');
+    if (!confirmed) return;
+    const deleteBtn = $('deleteImageBtn');
+    const originalHtml = deleteBtn.innerHTML;
+    try {
+      deleteBtn.disabled = true;
+      deleteBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="animation: spin 1s linear infinite"><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/></svg>`;
+      await deleteImageFromDrive(thumbUrl, hqUrl);
+      $('itemImageThumb').value = '';
+      $('itemImageHq').value = '';
+      const img = $('itemImageDisplay');
+      const placeholder = $('imagePlaceholder');
+      const imageContainer = $('imageContainer');
+      img.src = ''; img.classList.remove('loaded'); img.style.cursor = 'default'; img.onclick = null;
+      imageContainer.style.cursor = 'default'; imageContainer.onclick = null;
+      placeholder.style.display = 'block';
+      const currentId = $('itemId').value;
+      if (currentId && currentId.startsWith('row_')) {
+        const item = items.find(i => i.id === currentId);
+        if (item) {
+          item.thumb = ''; item.hq = ''; delete item.image;
+          saveCache(items); render();
+          await postToSheets({ action: 'update', row: item.rowNumber, thumb: '', hq: '' });
+        }
+      }
+      toast('Image deleted');
+    } catch (err) {
+      console.error('Delete image failed:', err);
+      toast('Failed to delete image: ' + err.message);
+    } finally {
+      deleteBtn.disabled = false;
+      deleteBtn.innerHTML = originalHtml;
+    }
+  });
+
+  $('imageFileInput').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { toast('Please select an image file'); return; }
+    activeImageUploadId++;
+    const myUploadId = activeImageUploadId;
+    if (currentLocalImageUrl) URL.revokeObjectURL(currentLocalImageUrl);
+    currentLocalImageUrl = URL.createObjectURL(file);
+    const img = $('itemImageDisplay');
+    const placeholder = $('imagePlaceholder');
+    img.src = currentLocalImageUrl;
+    img.classList.add('loaded');
+    placeholder.style.display = 'none';
+    $('deleteImageBtn').disabled = false;
+    const uploadBtn = $('uploadBtn');
+    const originalHtml = uploadBtn.innerHTML;
+    uploadBtn.classList.add('uploading');
+    uploadBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="animation: spin 1s linear infinite"><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/></svg>`;
+    const oldThumbUrl = $('itemImageThumb').value;
+    const oldHqUrl = $('itemImageHq').value;
+    pendingImageUpload = (async () => {
+      try {
+        const imageUrls = await uploadImageToDrive(file);
+        if (myUploadId === activeImageUploadId) {
+          $('itemImageThumb').value = imageUrls.thumb;
+          $('itemImageHq').value = imageUrls.hq;
+          const currentId = $('itemId').value;
+          if (currentId && currentId.startsWith('row_')) {
+            const item = items.find(i => i.id === currentId);
+            if (item) {
+              item.thumb = imageUrls.thumb; item.hq = imageUrls.hq; delete item.image;
+              saveCache(items); render();
+              await postToSheets({ action: 'update', row: item.rowNumber, thumb: imageUrls.thumb, hq: imageUrls.hq });
+              toast('Image saved');
+            }
+          } else { toast('Image uploaded'); }
+          if (oldThumbUrl || oldHqUrl) {
+            deleteImageFromDrive(oldThumbUrl, oldHqUrl).catch(err => { console.warn('Background deletion failed:', err); });
+          }
+        }
+      } catch (err) {
+        console.error('Background upload failed:', err);
+        if (myUploadId === activeImageUploadId) toast('Upload failed: ' + err.message);
+      } finally {
+        if (myUploadId === activeImageUploadId) {
+          uploadBtn.classList.remove('uploading');
+          uploadBtn.innerHTML = originalHtml;
+          pendingImageUpload = null;
+        }
+      }
+    })();
+    $('imageFileInput').value = '';
+  });
+
+  function loadImage(thumbUrl, hqUrl) {
+    const img = $('itemImageDisplay');
+    const placeholder = $('imagePlaceholder');
+    const deleteBtn = $('deleteImageBtn');
+    const imageContainer = $('imageContainer');
+    if (currentLocalImageUrl) { URL.revokeObjectURL(currentLocalImageUrl); currentLocalImageUrl = null; }
+    img.src = ''; img.classList.remove('loaded'); img.style.cursor = 'default'; img.onclick = null;
+    imageContainer.style.cursor = 'default'; imageContainer.onclick = null;
+    placeholder.style.display = 'block';
+    if (!thumbUrl && !hqUrl) { deleteBtn.disabled = true; return; }
+    deleteBtn.disabled = false;
+    const thumbDisplayUrl = getOptimizedDriveUrl(thumbUrl, 'w480');
+    const hqDisplayUrl = getOptimizedDriveUrl(hqUrl, 'w1920');
+    img.src = thumbDisplayUrl;
+    img.onload = () => { img.classList.add('loaded'); placeholder.style.display = 'none'; };
+    img.onerror = () => { console.error('Failed to load thumbnail:', thumbDisplayUrl); img.classList.remove('loaded'); placeholder.style.display = 'block'; };
+    if (hqDisplayUrl) {
+      img.style.cursor = 'zoom-in';
+      img.onclick = (e) => { e.stopPropagation(); openLightbox(hqDisplayUrl); };
+      imageContainer.style.cursor = 'zoom-in';
+    }
+  }
+
+  function openEdit(item) {
+    $('sheetTitle').textContent = item ? 'Edit gift card' : 'Add gift card';
+    $('itemId').value = item ? item.id : '';
+    $('itemName').value = item ? item.name : '';
+    $('itemValue').value = item ? item.value : 0;
+    $('itemExpiry').value = item ? item.expiry : '';
+    $('itemPlannedDate').value = item ? item.plannedDate : '';
+    $('itemCategory').value = item ? (item.category || '') : '';
+    $('itemLocation').value = item ? (item.location || '') : '';
+    const imgData = getImageData(item);
+    $('itemImageThumb').value = imgData.thumb;
+    $('itemImageHq').value = imgData.hq;
+    $('deleteBtn').style.display = item ? 'block' : 'none';
+    loadImage(imgData.thumb, imgData.hq);
+    sheet.scrollTop = 0;
+    history.pushState({ modal: true }, '');
+    isModalOpen = true;
+    overlay.classList.add('open');
+    setTimeout(() => $('itemName').focus(), 200);
+  }
+
+  let isSubmitting = false;
+  $('itemForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (isSubmitting) return;
+    isSubmitting = true;
+    try {
+      if (pendingImageUpload) {
+        toast('Finishing image upload...');
+        await pendingImageUpload;
+      }
+      const id = $('itemId').value;
+      const data = {
+        name: $('itemName').value.trim(),
+        value: Math.max(0, parseFloat($('itemValue').value) || 0),
+        expiry: $('itemExpiry').value.trim(),
+        plannedDate: $('itemPlannedDate').value.trim(),
+        category: $('itemCategory').value.trim(),
+        location: $('itemLocation').value.trim(),
+        thumb: $('itemImageThumb').value.trim(),
+        hq: $('itemImageHq').value.trim()
+      };
+      if (!data.name) { isSubmitting = false; return; }
+      if (isModalOpen && history.state && history.state.modal) history.back();
+      else closeSheetInternal();
+      if (id && id.startsWith('row_')) {
+        await updateItem(items.find(i => i.id === id), data);
+      } else {
+        await addItem(data);
+      }
+    } finally {
+      isSubmitting = false;
+    }
+  });
+
+  $('deleteBtn').addEventListener('click', async () => {
+    const id = $('itemId').value;
+    if (!id || !id.startsWith('row_')) return;
+    const item = items.find(i => i.id === id);
+    const confirmed = await showConfirm('Delete gift card?', `"${item ? item.name : 'This item'}" will be permanently removed along with its images.`, 'Delete');
+    if (confirmed) { closeSheet(); deleteItem(item); }
+  });
+
+  $('lightboxClose').addEventListener('click', closeLightbox);
+  $('lightbox').addEventListener('click', e => { if (e.target === $('lightbox')) closeLightbox(); });
+
+  let toastTimer;
+  function toast(msg) {
+    const t = $('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove('show'), 2000);
+  }
+
+  function init() {
+    const cached = loadCache();
+    if (cached && cached.items) {
+      items = cached.items;
+      lastUpdateTime = cached.timestamp;
+      nextRowNumber = Math.max(...items.map(i => i.rowNumber || 0), 1) + 1;
+      render();
+    }
+    setTimeout(() => {
+      loadAll(true, true).catch(err => console.error('Initial background fetch failed:', err));
+    }, 300);
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      const cached = loadCache();
+      const age = cached && cached.timestamp ? Date.now() - cached.timestamp : Infinity;
+      if (age > 5 * 60 * 1000) loadAll(true, true).catch(err => console.error('Visibility refresh failed:', err));
+    }
+  });
+
+  window.addEventListener('pageshow', (e) => {
+    if (e.persisted) loadAll(true, true).catch(err => console.error('Pageshow refresh failed:', err));
+  });
+
+  init();
+})();
+</script>
+</body>
+</html>
