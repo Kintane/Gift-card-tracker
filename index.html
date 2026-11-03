@@ -1,0 +1,212 @@
+const DRIVE_FOLDER_NAME = 'Gift card images';
+
+function doPost(e) {
+  try {
+    const data = JSON.parse(e.postData.contents);
+    
+    // Handle image deletion
+    if (data.action === 'deleteImage') {
+      const urlsToDelete = [];
+      if (data.thumbUrl) urlsToDelete.push(data.thumbUrl);
+      if (data.hqUrl) urlsToDelete.push(data.hqUrl);
+      if (data.imageUrl) urlsToDelete.push(data.imageUrl); // Legacy fallback
+      
+      const uniqueUrls = [...new Set(urlsToDelete)];
+      let deletedCount = 0;
+      let errors = [];
+
+      for (const url of uniqueUrls) {
+        const fileId = extractFileId(url);
+        if (fileId) {
+          try {
+            const file = DriveApp.getFileById(fileId);
+            file.setTrashed(true);
+            deletedCount++;
+          } catch (err) {
+            errors.push('Failed to delete ' + fileId + ': ' + err.toString());
+          }
+        }
+      }
+
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true, 
+        message: `Deleted ${deletedCount} files.`,
+        errors: errors.length > 0 ? errors : undefined
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    // Handle dual image upload
+    if (data.action === 'uploadImage') {
+      return handleImageUpload(data);
+    }
+    
+    // IMPORTANT: If this script is NOT bound to the spreadsheet, replace the next line with:
+    // const ss = SpreadsheetApp.openById('YOUR_SPREADSHEET_ID_HERE');
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getActiveSheet();
+    
+    if (data.action === 'add') {
+      sheet.appendRow([
+        data.name, 
+        data.value, 
+        data.expiry, 
+        data.plannedDate, 
+        data.category, 
+        data.location,
+        data.thumb || '', 
+        data.hq || ''
+      ]);
+      return ContentService.createTextOutput(JSON.stringify({success: true, message: 'Added'}))
+        .setMimeType(ContentService.MimeType.JSON);
+    } 
+    else if (data.action === 'update') {
+      sheet.getRange(data.row, 1, 1, 8).setValues([[
+        data.name, 
+        data.value, 
+        data.expiry, 
+        data.plannedDate, 
+        data.category, 
+        data.location,
+        data.thumb || '', 
+        data.hq || ''
+      ]]);
+      return ContentService.createTextOutput(JSON.stringify({success: true, message: 'Updated'}))
+        .setMimeType(ContentService.MimeType.JSON);
+    } 
+    else if (data.action === 'delete') {
+      sheet.deleteRow(data.row);
+      return ContentService.createTextOutput(JSON.stringify({success: true, message: 'Deleted'}))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    return ContentService.createTextOutput(JSON.stringify({success: false, message: 'Invalid action'}))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({success: false, message: error.toString()}))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function handleImageUpload(data) {
+  try {
+    if (!data.thumbData || !data.hqData) {
+      throw new Error('Missing image data: thumbData=' + typeof data.thumbData + ', hqData=' + typeof data.hqData);
+    }
+    
+    let parentFolder = DriveApp.getFoldersByName(DRIVE_FOLDER_NAME).hasNext() 
+      ? DriveApp.getFoldersByName(DRIVE_FOLDER_NAME).next()
+      : DriveApp.createFolder(DRIVE_FOLDER_NAME);
+    
+    let thumbFolder;
+    let folders = parentFolder.getFoldersByName('thumbnails');
+    if (folders.hasNext()) {
+      thumbFolder = folders.next();
+    } else {
+      thumbFolder = parentFolder.createFolder('thumbnails');
+    }
+
+    const uniqueId = Date.now().toString();
+    const hqFilename = 'item' + uniqueId;
+    const thumbFilename = 'thumb_item' + uniqueId;
+
+    // Process Thumbnail
+    const thumbMatches = String(data.thumbData).match(/^data:image\/(\w+);base64,(.+)$/);
+    if (!thumbMatches) throw new Error('Invalid thumbnail data format');
+    const thumbExt = thumbMatches[1];
+    const thumbBlob = Utilities.newBlob(
+      Utilities.base64Decode(thumbMatches[2]), 
+      'image/' + thumbExt, 
+      thumbFilename + '.' + thumbExt
+    );
+    const thumbFile = thumbFolder.createFile(thumbBlob);
+    thumbFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    
+    // Process High Quality
+    const hqMatches = String(data.hqData).match(/^data:image\/(\w+);base64,(.+)$/);
+    if (!hqMatches) throw new Error('Invalid HQ data format');
+    const hqExt = hqMatches[1];
+    const hqBlob = Utilities.newBlob(
+      Utilities.base64Decode(hqMatches[2]), 
+      'image/' + hqExt, 
+      hqFilename + '.' + hqExt
+    );
+    const hqFile = parentFolder.createFile(hqBlob);
+    hqFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+    const thumbUrl = 'https://lh3.googleusercontent.com/d/' + thumbFile.getId();
+    const hqUrl = 'https://lh3.googleusercontent.com/d/' + hqFile.getId();
+
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true, 
+      thumbUrl: thumbUrl,
+      hqUrl: hqUrl,
+      message: 'Images uploaded successfully'
+    })).setMimeType(ContentService.MimeType.JSON);
+    
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false, 
+      message: 'Upload failed: ' + error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function doGet() {
+  try {
+    // IMPORTANT: If this script is NOT bound to the spreadsheet, replace the next line with:
+    // const ss = SpreadsheetApp.openById('YOUR_SPREADSHEET_ID_HERE');
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getActiveSheet();
+    const data = sheet.getDataRange().getValues();
+    
+    const items = data.slice(1).map((row, index) => {
+      const name = (row[0] || '').toString().trim();
+      if (!name) return null;
+      
+      return {
+        rowNumber: index + 2,
+        name: name,
+        value: parseFloat(row[1]) || 0,
+        expiry: formatDateForJS(row[2]),
+        plannedDate: formatDateForJS(row[3]),
+        category: (row[4] || '').toString().trim(),
+        location: (row[5] || '').toString().trim(),
+        thumb: (row[6] || '').toString().trim(),
+        hq: (row[7] || '').toString().trim()
+      };
+    }).filter(item => item !== null);
+    
+    return ContentService.createTextOutput(JSON.stringify(items))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({error: error.toString()}))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// Helper function to ensure dates from Google Sheets are formatted as YYYY-MM-DD strings
+function formatDateForJS(dateVal) {
+  if (!dateVal) return '';
+  if (typeof dateVal === 'object' && dateVal instanceof Date) {
+    const offset = dateVal.getTimezoneOffset();
+    const localDate = new Date(dateVal.getTime() - (offset * 60 * 1000));
+    return localDate.toISOString().split('T')[0];
+  }
+  const str = dateVal.toString().trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+  const d = new Date(str);
+  if (!isNaN(d.getTime())) {
+    const offset = d.getTimezoneOffset();
+    const localDate = new Date(d.getTime() - (offset * 60 * 1000));
+    return localDate.toISOString().split('T')[0];
+  }
+  return str;
+}
+
+// Helper function to extract Google Drive File ID from various URL formats
+function extractFileId(url) {
+  if (!url || typeof url !== 'string') return null;
+  const match = url.match(/\/d\/([a-zA-Z0-9_-]{20,})|[?&]id=([a-zA-Z0-9_-]{20,})/);
+  if (match) return match[1] || match[2];
+  return null;
+}
