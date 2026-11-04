@@ -189,6 +189,9 @@
       -webkit-backdrop-filter: blur(8px);
       border: 1px solid var(--border);
     }
+    .qty-fields-column .compact-field input.date-display {
+      cursor: pointer;
+    }
   }
   @media (min-width: 640px) { .overlay.open { align-items: center; } }
 
@@ -390,12 +393,18 @@
             <input type="number" id="itemValue" min="0" step="0.01" value="0" required />
           </div>
           <div class="compact-field">
-            <label for="itemExpiry">Expiry</label>
-            <input type="date" id="itemExpiry" lang="de-DE" required />
+            <label>Expiry</label>
+            <div style="position: relative; width: 100%;">
+              <input type="text" id="itemExpiryDisplay" class="date-display" readonly placeholder="DD.MM.YYYY" style="cursor: pointer;" />
+              <input type="date" id="itemExpiry" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer;" required />
+            </div>
           </div>
           <div class="compact-field">
-            <label for="itemPlannedDate">Planned</label>
-            <input type="date" id="itemPlannedDate" lang="de-DE" />
+            <label>Planned</label>
+            <div style="position: relative; width: 100%;">
+              <input type="text" id="itemPlannedDateDisplay" class="date-display" readonly placeholder="DD.MM.YYYY" style="cursor: pointer;" />
+              <input type="date" id="itemPlannedDate" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer;" />
+            </div>
           </div>
         </div>
       </div>
@@ -781,6 +790,28 @@
     return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
   }
 
+  function formatDateDisplay(dateStr) {
+    if (!dateStr) return '';
+    const parts = String(dateStr).split('-');
+    if (parts.length === 3) {
+      return `${parts[2]}.${parts[1]}.${parts[0]}`;
+    }
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '';
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    return `${day}.${month}.${year}`;
+  }
+
+  function syncDateDisplay(inputId, displayId) {
+    const input = $(inputId);
+    const display = $(displayId);
+    const update = () => { display.value = formatDateDisplay(input.value); };
+    input.addEventListener('change', update);
+    input.addEventListener('input', update);
+  }
+
   function formatExpiryBadge(expiryStr) {
     if (!expiryStr) return '<span class="expiry-badge ok">No expiry</span>';
     const status = getExpiryStatus(expiryStr);
@@ -1068,8 +1099,13 @@
     $('itemId').value = item ? item.id : '';
     $('itemName').value = item ? item.name : '';
     $('itemValue').value = item ? item.value : 0;
+    
     $('itemExpiry').value = item ? item.expiry : '';
+    $('itemExpiryDisplay').value = item ? formatDateDisplay(item.expiry) : '';
+    
     $('itemPlannedDate').value = item ? item.plannedDate : '';
+    $('itemPlannedDateDisplay').value = item ? formatDateDisplay(item.plannedDate) : '';
+    
     $('itemCategory').value = item ? (item.category || '') : '';
     $('itemLocation').value = item ? (item.location || '') : '';
     const imgData = getImageData(item);
@@ -1139,6 +1175,10 @@
   }
 
   function init() {
+    // Initialize date display sync
+    syncDateDisplay('itemExpiry', 'itemExpiryDisplay');
+    syncDateDisplay('itemPlannedDate', 'itemPlannedDateDisplay');
+
     const cached = loadCache();
     if (cached && cached.items) {
       items = cached.items;
