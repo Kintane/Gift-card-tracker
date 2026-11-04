@@ -189,7 +189,7 @@
       -webkit-backdrop-filter: blur(8px);
       border: 1px solid var(--border);
     }
-    .qty-fields-column .compact-field input.date-display {
+    .qty-fields-column .compact-field .date-wrapper {
       cursor: pointer;
     }
   }
@@ -241,6 +241,33 @@
     transition: border-color 0.15s; text-align: center; color-scheme: dark;
   }
   .compact-field input:focus { border-color: var(--accent); }
+
+  .date-wrapper {
+    position: relative;
+    width: 100%;
+  }
+  .date-wrapper input[type="date"] {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
+    z-index: 2;
+  }
+  .date-wrapper .date-display {
+    width: 100%;
+    padding: 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 14px;
+    text-align: center;
+    cursor: pointer;
+    pointer-events: none;
+  }
 
   .details-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
   .field { margin-bottom: 14px; }
@@ -394,16 +421,16 @@
           </div>
           <div class="compact-field">
             <label>Expiry</label>
-            <div style="position: relative; width: 100%;">
-              <input type="text" id="itemExpiryDisplay" class="date-display" readonly placeholder="DD.MM.YYYY" style="cursor: pointer;" />
-              <input type="date" id="itemExpiry" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer;" required />
+            <div class="date-wrapper">
+              <input type="date" id="itemExpiry" required />
+              <div class="date-display" id="itemExpiryDisplay">DD.MM.YYYY</div>
             </div>
           </div>
           <div class="compact-field">
             <label>Planned</label>
-            <div style="position: relative; width: 100%;">
-              <input type="text" id="itemPlannedDateDisplay" class="date-display" readonly placeholder="DD.MM.YYYY" style="cursor: pointer;" />
-              <input type="date" id="itemPlannedDate" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer;" />
+            <div class="date-wrapper">
+              <input type="date" id="itemPlannedDate" />
+              <div class="date-display" id="itemPlannedDateDisplay">DD.MM.YYYY</div>
             </div>
           </div>
         </div>
@@ -807,9 +834,12 @@
   function syncDateDisplay(inputId, displayId) {
     const input = $(inputId);
     const display = $(displayId);
-    const update = () => { display.value = formatDateDisplay(input.value); };
+    const update = () => { 
+      display.textContent = formatDateDisplay(input.value) || 'DD.MM.YYYY'; 
+    };
     input.addEventListener('change', update);
     input.addEventListener('input', update);
+    update();
   }
 
   function formatExpiryBadge(expiryStr) {
@@ -1101,10 +1131,10 @@
     $('itemValue').value = item ? item.value : 0;
     
     $('itemExpiry').value = item ? item.expiry : '';
-    $('itemExpiryDisplay').value = item ? formatDateDisplay(item.expiry) : '';
+    $('itemExpiryDisplay').textContent = item && item.expiry ? formatDateDisplay(item.expiry) : 'DD.MM.YYYY';
     
     $('itemPlannedDate').value = item ? item.plannedDate : '';
-    $('itemPlannedDateDisplay').value = item ? formatDateDisplay(item.plannedDate) : '';
+    $('itemPlannedDateDisplay').textContent = item && item.plannedDate ? formatDateDisplay(item.plannedDate) : 'DD.MM.YYYY';
     
     $('itemCategory').value = item ? (item.category || '') : '';
     $('itemLocation').value = item ? (item.location || '') : '';
