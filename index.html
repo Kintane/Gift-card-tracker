@@ -237,6 +237,20 @@
     border-radius: 8px; color: var(--text); font-size: 14px; outline: none;
     transition: border-color 0.15s; text-align: center; color-scheme: dark;
   }
+  
+  /* Hide native calendar icon for date inputs */
+  .compact-field input[type="date"]::-webkit-calendar-picker-indicator {
+    display: none;
+    -webkit-appearance: none;
+    appearance: none;
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+  .compact-field input[type="date"]::-moz-calendar-indicator {
+    display: none;
+  }
+
   .compact-field input:focus { border-color: var(--accent); }
 
   .details-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
